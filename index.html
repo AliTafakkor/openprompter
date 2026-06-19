@@ -308,6 +308,22 @@
     #kd-footer {
       display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end;
     }
+
+    /* ── Drop overlay ────────────────────────────────── */
+    #drop-overlay {
+      display: none;
+      position: fixed; inset: 0; z-index: 600;
+      background: rgba(34,197,94,.06);
+      border: 3px dashed rgba(34,197,94,.35);
+      align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+    #drop-overlay.active { display: flex; }
+    #drop-overlay span {
+      font-size: 22px; color: rgba(34,197,94,.55);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      letter-spacing: .01em;
+    }
   </style>
 </head>
 <body>
@@ -419,6 +435,9 @@
   </div>
 </div>
 
+<!-- ── Drop overlay ────────────────────────────────────── -->
+<div id="drop-overlay"><span>Drop file to load</span></div>
+
 <!-- ── Progress ────────────────────────────────────────── -->
 <div id="prog-rail"><div id="prog-fill"></div></div>
 
@@ -468,8 +487,11 @@ document.getElementById('placeholder-open').addEventListener('click', openFilePi
 
 document.getElementById('file-input').addEventListener('change', async (e) => {
   const file = e.target.files[0];
-  if (!file) return;
+  if (file) await parseAndLoad(file);
+  e.target.value = '';
+});
 
+async function parseAndLoad(file) {
   const ext = file.name.split('.').pop().toLowerCase();
   let html = '';
 
@@ -477,8 +499,7 @@ document.getElementById('file-input').addEventListener('change', async (e) => {
     if (ext === 'docx') {
       if (typeof mammoth === 'undefined') { toast('Error: mammoth library not loaded'); return; }
       const buf = await file.arrayBuffer();
-      const res = await mammoth.convertToHtml({ arrayBuffer: buf });
-      html = res.value;
+      html = (await mammoth.convertToHtml({ arrayBuffer: buf })).value;
     } else if (ext === 'md') {
       if (typeof marked === 'undefined') { toast('Error: marked library not loaded'); return; }
       html = marked.parse(await file.text());
@@ -497,10 +518,8 @@ document.getElementById('file-input').addEventListener('change', async (e) => {
   stop();
   loadContent(file.name, html);
   saveLastFile(file.name, html);
-
-  e.target.value = ''; // allow reloading same file
   toast('Loaded: ' + file.name);
-});
+}
 
 function loadContent(name, html) {
   textEl.innerHTML = html;
@@ -970,6 +989,25 @@ document.addEventListener('wheel', (e) => {
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ── Drag and drop ──────────────────────────────────────────
+const dropOverlay = document.getElementById('drop-overlay');
+
+document.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropOverlay.classList.add('active');
+});
+
+document.addEventListener('dragleave', (e) => {
+  if (!e.relatedTarget) dropOverlay.classList.remove('active');
+});
+
+document.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  dropOverlay.classList.remove('active');
+  const file = e.dataTransfer.files[0];
+  if (file) await parseAndLoad(file);
+});
 
 // ── Auto-restore last file on load ─────────────────────────
 restoreLastFile();
