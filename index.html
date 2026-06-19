@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenPrompter</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #000000;
+      --text:    #ffffff;
+      --accent:  #22c55e;
+      --ctrl-bg: #111111;
+      --ctrl-br: #2a2a2a;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* ── Toolbar ─────────────────────────────────────── */
+    #toolbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 200;
+      background: var(--ctrl-bg);
+      border-bottom: 1px solid var(--ctrl-br);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      flex-wrap: wrap;
+      transition: transform 0.35s ease;
+    }
+    #toolbar.hide { transform: translateY(-110%); }
+
+    .sep { width: 1px; height: 24px; background: var(--ctrl-br); flex-shrink: 0; margin: 0 2px; }
+    .lbl { font-size: 11px; color: #555; white-space: nowrap; }
+
+    .btn {
+      background: #1c1c1c;
+      color: #ccc;
+      border: 1px solid var(--ctrl-br);
+      padding: 5px 12px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 13px;
+      white-space: nowrap;
+      transition: background .15s, color .15s;
+    }
+    .btn:hover  { background: #2a2a2a; color: #fff; }
+    .btn:disabled { opacity: 0.35; cursor: default; }
+    .btn.on     { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+    .btn.playing { background: #ef4444; border-color: #ef4444; color: #fff; }
+
+    .slider-wrap { display: flex; align-items: center; gap: 6px; }
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 88px; height: 4px;
+      background: #2e2e2e; border-radius: 2px;
+      outline: none; cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px;
+      background: var(--accent); border-radius: 50%; cursor: pointer;
+    }
+    .val { font-size: 11px; color: var(--accent); min-width: 26px; text-align: right; }
+
+    input[type=color] {
+      width: 30px; height: 26px;
+      border: 1px solid var(--ctrl-br); border-radius: 4px;
+      cursor: pointer; background: none; padding: 2px;
+    }
+    input[type=file] { display: none; }
+
+    /* ── Stage ───────────────────────────────────────── */
+    #stage {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+    }
+
+    /* Fade top & bottom edges */
+    #stage::before, #stage::after {
+      content: '';
+      position: absolute;
+      left: 0; right: 0;
+      height: 130px;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #stage::before { top: 0;    background: linear-gradient(to bottom, var(--bg), transparent); }
+    #stage::after  { bottom: 0; background: linear-gradient(to top,    var(--bg), transparent); }
+
+    /* Reading guide */
+    #guide {
+      position: absolute;
+      left: 0; right: 0; top: 50%;
+      transform: translateY(-50%);
+      height: 2px;
+      background: rgba(34,197,94,.3);
+      pointer-events: none;
+      z-index: 11;
+      display: none;
+    }
+    #guide.on { display: block; }
+
+    /* Scroll container */
+    #scroll {
+      height: 100%;
+      overflow: hidden;
+    }
+    #scroll.manual {
+      overflow-y: scroll;
+      cursor: default;
+    }
+    #scroll.manual::-webkit-scrollbar { width: 4px; }
+    #scroll.manual::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+    /* Text */
+    #text {
+      padding: 50vh 18% 70vh;
+      font-size: 36px;
+      line-height: 1.7;
+      font-family: Georgia, 'Times New Roman', serif;
+      color: var(--text);
+      word-break: break-word;
+    }
+    #text h1 { font-size: 1.4em; margin: .6em 0 .3em; }
+    #text h2 { font-size: 1.2em; margin: .6em 0 .3em; }
+    #text h3 { font-size: 1.05em; margin: .5em 0 .25em; }
+    #text p  { margin-bottom: .7em; }
+    #text ul, #text ol { padding-left: 1.5em; margin-bottom: .7em; }
+    #text li { margin-bottom: .3em; }
+    #text strong { font-weight: 700; }
+    #text em { font-style: italic; }
+
+    /* Placeholder */
+    #placeholder {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 16px; min-height: 80vh; color: #2e2e2e;
+    }
+    #placeholder p { font-size: 18px; font-family: Georgia, serif; }
+
+    /* ── Progress rail (right edge) ──────────────────── */
+    #prog-rail {
+      position: fixed;
+      right: 0; top: 0; bottom: 0;
+      width: 3px; background: #111; z-index: 300;
+    }
+    #prog-fill {
+      width: 100%; background: var(--accent);
+      opacity: .7; height: 0%;
+    }
+
+    /* ── Toast ───────────────────────────────────────── */
+    #toast {
+      position: fixed; bottom: 22px; left: 50%;
+      transform: translateX(-50%) translateY(12px);
+      background: rgba(255,255,255,.1);
+      backdrop-filter: blur(10px);
+      color: #eee; padding: 6px 18px;
+      border-radius: 20px; font-size: 13px;
+      pointer-events: none; z-index: 400;
+      opacity: 0; transition: opacity .25s, transform .25s;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ── Key hints ───────────────────────────────────── */
+    #hints {
+      position: fixed; bottom: 18px; right: 14px;
+      font-size: 11px; color: #2a2a2a;
+      line-height: 1.9; text-align: right;
+      pointer-events: none; z-index: 50;
+    }
+
+    /* ── Remote Setup Modal ──────────────────────────── */
+    #kd-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.75);
+      backdrop-filter: blur(6px);
+      z-index: 500;
+      align-items: center; justify-content: center;
+    }
+    #kd-overlay.open { display: flex; }
+
+    #kd-box {
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 14px;
+      padding: 22px 26px 20px;
+      width: 520px; max-width: 95vw;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    #kd-head {
+      display: flex; align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    #kd-head h2 { font-size: 15px; color: #fff; }
+    #kd-head .kd-x {
+      background: none; border: none; color: #444;
+      font-size: 18px; cursor: pointer; line-height: 1;
+      padding: 2px 6px; border-radius: 4px;
+      transition: color .15s;
+    }
+    #kd-head .kd-x:hover { color: #fff; }
+
+    #kd-box p.sub {
+      font-size: 12px; color: #4a4a4a; margin-bottom: 16px;
+    }
+
+    /* Action table */
+    #kd-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    #kd-table thead th {
+      font-size: 10px; color: #444; text-transform: uppercase;
+      letter-spacing: .08em; padding: 0 8px 8px;
+      text-align: left; border-bottom: 1px solid #222;
+    }
+    #kd-table thead th:last-child { text-align: right; }
+
+    #kd-table tbody tr {
+      border-bottom: 1px solid #1e1e1e;
+    }
+    #kd-table tbody tr:last-child { border-bottom: none; }
+
+    #kd-table tbody td {
+      padding: 9px 8px; vertical-align: middle;
+    }
+
+    .kd-action-name {
+      font-size: 13px; color: #bbb;
+    }
+
+    .kd-badge {
+      display: inline-block;
+      font-size: 11px; font-family: monospace;
+      background: #1e1e1e; border: 1px solid #2e2e2e;
+      color: var(--accent);
+      padding: 3px 9px; border-radius: 4px;
+      min-width: 80px; text-align: center;
+    }
+    .kd-badge.empty { color: #333; border-color: #1e1e1e; }
+
+    .kd-set-btn {
+      background: #1e1e1e; color: #666;
+      border: 1px solid #2a2a2a;
+      padding: 4px 12px; border-radius: 5px;
+      font-size: 12px; cursor: pointer;
+      white-space: nowrap;
+      transition: background .15s, color .15s, border-color .15s;
+      float: right;
+    }
+    .kd-set-btn:hover { background: #2a2a2a; color: #aaa; }
+    .kd-set-btn.listening {
+      background: var(--accent); color: #000;
+      border-color: var(--accent); font-weight: 600;
+      animation: kd-pulse 1s ease infinite;
+    }
+    .kd-set-btn.has-key { color: #555; }
+
+    @keyframes kd-pulse {
+      0%,100% { opacity: 1; } 50% { opacity: .6; }
+    }
+
+    /* Settings section */
+    #kd-settings {
+      margin-top: 14px;
+      border-top: 1px solid #1e1e1e;
+      padding-top: 14px;
+    }
+    .kd-setting-row {
+      display: flex; align-items: center; gap: 16px;
+    }
+    .kd-setting-label {
+      font-size: 12px; color: #666; min-width: 90px;
+    }
+
+    /* Live strip */
+    #kd-live {
+      margin-top: 16px;
+      background: #0e0e0e; border: 1px solid #1e1e1e;
+      border-radius: 7px; padding: 9px 14px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    #kd-live .lbl { font-size: 11px; color: #3a3a3a; white-space: nowrap; }
+    #kd-live-key {
+      font-size: 13px; font-family: monospace;
+      color: #555; flex: 1;
+    }
+    #kd-live-key.lit { color: var(--accent); }
+
+    #kd-footer {
+      display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Toolbar ─────────────────────────────────────────── -->
+<div id="toolbar">
+
+  <button class="btn" id="open-btn">📄 Open File</button>
+  <input type="file" id="file-input" accept=".txt,.md,.docx">
+  <span class="lbl" id="fname" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+
+  <div class="sep"></div>
+
+  <button class="btn" id="play-btn"   disabled>▶ Play</button>
+  <button class="btn" id="manual-btn" disabled>Manual</button>
+  <button class="btn" id="reset-btn"  disabled>↩ Reset</button>
+
+  <div class="sep"></div>
+
+  <div class="slider-wrap">
+    <span class="lbl">Speed</span>
+    <input type="range" id="speed-r" min="1" max="30" value="4">
+    <span class="val" id="speed-v">4</span>
+  </div>
+
+  <div class="slider-wrap">
+    <span class="lbl">Size</span>
+    <input type="range" id="font-r" min="14" max="80" value="36">
+    <span class="val" id="font-v">36</span>
+  </div>
+
+  <div class="sep"></div>
+
+  <span class="lbl">BG</span>
+  <input type="color" id="bg-col"   value="#000000" title="Background">
+  <span class="lbl">Text</span>
+  <input type="color" id="text-col" value="#ffffff" title="Text color">
+
+  <div class="sep"></div>
+
+  <button class="btn" id="guide-btn">Guide</button>
+  <button class="btn" id="mirror-btn">Mirror</button>
+  <button class="btn" id="fs-btn">⛶ Fullscreen</button>
+
+  <div class="sep"></div>
+  <button class="btn" id="kd-btn">Remote Setup</button>
+
+</div>
+
+<!-- ── Stage ──────────────────────────────────────────── -->
+<div id="stage">
+  <div id="guide"></div>
+  <div id="scroll">
+    <div id="text">
+      <div id="placeholder">
+        <svg width="60" height="60" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4
+            18H6V4h7v5h5v11zM8 15h8v2H8zm0-4h8v2H8zm0-4h5v2H8z"/>
+        </svg>
+        <p>Open a .txt, .md, or .docx file to begin</p>
+        <button class="btn" id="placeholder-open" style="font-size:15px;padding:10px 24px">
+          Open File
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Remote Setup Modal ───────────────────────────────── -->
+<div id="kd-overlay">
+  <div id="kd-box">
+    <div id="kd-head">
+      <h2>Remote Setup</h2>
+      <button class="kd-x" id="kd-close-x">✕</button>
+    </div>
+    <p class="sub">Click <strong style="color:#666">Set</strong> next to an action, then press a button on your remote to assign it.</p>
+
+    <table id="kd-table">
+      <thead>
+        <tr>
+          <th>Action</th>
+          <th>Assigned Key</th>
+          <th style="text-align:right">Assign</th>
+        </tr>
+      </thead>
+      <tbody id="kd-tbody"></tbody>
+    </table>
+
+    <div id="kd-settings">
+      <div class="kd-setting-row">
+        <span class="kd-setting-label">Scroll Speed</span>
+        <div class="slider-wrap">
+          <input type="range" id="kd-jump-r" min="50" max="600" step="10" value="250">
+          <span class="val" id="kd-jump-v">250</span>
+          <span class="lbl">px</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="kd-live">
+      <span class="lbl">Last detected:</span>
+      <span id="kd-live-key">—</span>
+    </div>
+
+    <div id="kd-footer">
+      <button class="btn" id="kd-clear-all">Clear All</button>
+      <button class="btn on" id="kd-close">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Progress ────────────────────────────────────────── -->
+<div id="prog-rail"><div id="prog-fill"></div></div>
+
+<!-- ── Toast ───────────────────────────────────────────── -->
+<div id="toast"></div>
+
+<!-- ── Key hints ───────────────────────────────────────── -->
+<div id="hints">
+  Space: play/pause &nbsp;·&nbsp; M: manual &nbsp;·&nbsp; R: reset<br>
+  ↑↓: speed &nbsp;·&nbsp; F: fullscreen &nbsp;·&nbsp; Esc: pause
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────
+let playing    = false;
+let manualMode = false;
+let mirrored   = false;
+let guideOn    = false;
+let speed      = 4;
+let scrollY    = 0;
+let raf        = null;
+let loaded     = false;
+let tbTimer    = null;
+
+// ── Elements ───────────────────────────────────────────────
+const toolbar   = document.getElementById('toolbar');
+const scrollEl  = document.getElementById('scroll');
+const textEl    = document.getElementById('text');
+const playBtn   = document.getElementById('play-btn');
+const manualBtn = document.getElementById('manual-btn');
+const resetBtn  = document.getElementById('reset-btn');
+const mirrorBtn = document.getElementById('mirror-btn');
+const guideBtn  = document.getElementById('guide-btn');
+const guideEl   = document.getElementById('guide');
+const fsBtn     = document.getElementById('fs-btn');
+const progFill  = document.getElementById('prog-fill');
+const toastEl   = document.getElementById('toast');
+const speedR    = document.getElementById('speed-r');
+const fontR     = document.getElementById('font-r');
+
+// ── File Loading ───────────────────────────────────────────
+function openFilePicker() {
+  document.getElementById('file-input').click();
+}
+document.getElementById('open-btn').addEventListener('click', openFilePicker);
+document.getElementById('placeholder-open').addEventListener('click', openFilePicker);
+
+document.getElementById('file-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const ext = file.name.split('.').pop().toLowerCase();
+  let html = '';
+
+  try {
+    if (ext === 'docx') {
+      if (typeof mammoth === 'undefined') { toast('Error: mammoth library not loaded'); return; }
+      const buf = await file.arrayBuffer();
+      const res = await mammoth.convertToHtml({ arrayBuffer: buf });
+      html = res.value;
+    } else if (ext === 'md') {
+      if (typeof marked === 'undefined') { toast('Error: marked library not loaded'); return; }
+      html = marked.parse(await file.text());
+    } else {
+      const raw = await file.text();
+      html = raw.split(/\n{2,}/)
+        .map(p => p.trim()).filter(Boolean)
+        .map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`)
+        .join('') || `<p>${raw}</p>`;
+    }
+  } catch (err) {
+    toast('Load error: ' + err.message);
+    return;
+  }
+
+  stop();
+  loadContent(file.name, html);
+  saveLastFile(file.name, html);
+
+  e.target.value = ''; // allow reloading same file
+  toast('Loaded: ' + file.name);
+});
+
+function loadContent(name, html) {
+  textEl.innerHTML = html;
+  loaded = true;
+  scrollY = 0;
+  scrollEl.scrollTop = 0;
+  progFill.style.height = '0%';
+  stopMomentum();
+
+  playBtn.disabled   = false;
+  manualBtn.disabled = false;
+  resetBtn.disabled  = false;
+
+  const short = name.length > 32 ? '…' + name.slice(-29) : name;
+  document.getElementById('fname').textContent = short;
+}
+
+function saveLastFile(name, html) {
+  try { localStorage.setItem('tp_last_file', JSON.stringify({ name, html })); } catch (_) {}
+}
+
+function restoreLastFile() {
+  try {
+    const raw = localStorage.getItem('tp_last_file');
+    if (!raw) return;
+    const { name, html } = JSON.parse(raw);
+    if (!html) return;
+    loadContent(name, html);
+    toast('Restored: ' + name);
+  } catch (_) {}
+}
+
+// ── Playback ───────────────────────────────────────────────
+function play() {
+  if (!loaded || manualMode) return;
+  playing = true;
+  playBtn.textContent = '⏸ Pause';
+  playBtn.classList.add('playing');
+  tick();
+}
+
+function stop() {
+  playing = false;
+  playBtn.textContent = '▶ Play';
+  playBtn.classList.remove('playing');
+  if (raf) { cancelAnimationFrame(raf); raf = null; }
+}
+
+function togglePlay() {
+  if (!loaded) return;
+  playing ? stop() : play();
+}
+
+function tick() {
+  if (!playing) return;
+  const max = scrollEl.scrollHeight - scrollEl.clientHeight;
+  if (scrollY >= max) {
+    stop();
+    toast('End of document');
+    return;
+  }
+  scrollY += speed * 0.4;
+  scrollEl.scrollTop = scrollY;
+  updateProg();
+  raf = requestAnimationFrame(tick);
+}
+
+// ── Manual Mode ────────────────────────────────────────────
+function toggleManual() {
+  if (!loaded) return;
+  manualMode = !manualMode;
+  if (manualMode) {
+    stop();
+    scrollEl.classList.add('manual');
+    manualBtn.classList.add('on');
+    manualBtn.textContent = '⟵ Auto';
+    playBtn.disabled = true;
+    toast('Manual scroll — use mouse/trackpad');
+  } else {
+    scrollEl.classList.remove('manual');
+    manualBtn.classList.remove('on');
+    manualBtn.textContent = 'Manual';
+    playBtn.disabled = false;
+    scrollY = scrollEl.scrollTop;
+    toast('Auto scroll');
+  }
+}
+
+// Sync position when user manually scrolls
+scrollEl.addEventListener('scroll', () => {
+  if (manualMode || !playing) {
+    scrollY = scrollEl.scrollTop;
+    updateProg();
+  }
+});
+
+// Pause on wheel interaction during auto-scroll
+scrollEl.addEventListener('wheel', () => {
+  if (!manualMode && playing) {
+    stop();
+    scrollY = scrollEl.scrollTop;
+    toast('Paused — Space to resume');
+  }
+}, { passive: true });
+
+// ── Progress ───────────────────────────────────────────────
+function updateProg() {
+  const max = scrollEl.scrollHeight - scrollEl.clientHeight;
+  const pct = max > 0 ? (scrollEl.scrollTop / max) * 100 : 0;
+  progFill.style.height = pct + '%';
+}
+
+// ── Reset ──────────────────────────────────────────────────
+function resetScroll() {
+  stop();
+  scrollY = 0;
+  scrollEl.scrollTop = 0;
+  progFill.style.height = '0%';
+}
+
+// ── Speed ──────────────────────────────────────────────────
+speedR.addEventListener('input', () => {
+  speed = parseInt(speedR.value);
+  document.getElementById('speed-v').textContent = speed;
+});
+
+// ── Font size ──────────────────────────────────────────────
+fontR.addEventListener('input', () => {
+  const v = parseInt(fontR.value);
+  textEl.style.fontSize = v + 'px';
+  document.getElementById('font-v').textContent = v;
+});
+
+// ── Colors ─────────────────────────────────────────────────
+document.getElementById('bg-col').addEventListener('input', (e) => {
+  document.documentElement.style.setProperty('--bg', e.target.value);
+  document.body.style.background = e.target.value;
+});
+
+document.getElementById('text-col').addEventListener('input', (e) => {
+  document.documentElement.style.setProperty('--text', e.target.value);
+  textEl.style.color = e.target.value;
+});
+
+// ── Guide line ─────────────────────────────────────────────
+guideBtn.addEventListener('click', () => {
+  guideOn = !guideOn;
+  guideEl.classList.toggle('on', guideOn);
+  guideBtn.classList.toggle('on', guideOn);
+  toast(guideOn ? 'Guide: ON' : 'Guide: OFF');
+});
+
+// ── Mirror ─────────────────────────────────────────────────
+mirrorBtn.addEventListener('click', () => {
+  mirrored = !mirrored;
+  textEl.style.transform = mirrored ? 'scaleX(-1)' : '';
+  mirrorBtn.classList.toggle('on', mirrored);
+  toast(mirrored ? 'Mirror: ON' : 'Mirror: OFF');
+});
+
+// ── Fullscreen ─────────────────────────────────────────────
+fsBtn.addEventListener('click', toggleFS);
+
+function toggleFS() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => toast('Fullscreen unavailable'));
+  } else {
+    document.exitFullscreen();
+  }
+}
+
+document.addEventListener('fullscreenchange', () => {
+  const fs = !!document.fullscreenElement;
+  fsBtn.textContent = fs ? '✕ Exit Full' : '⛶ Fullscreen';
+  fs ? scheduleTbHide() : showTb();
+});
+
+function showTb() {
+  toolbar.classList.remove('hide');
+  clearTimeout(tbTimer);
+}
+
+function scheduleTbHide() {
+  clearTimeout(tbTimer);
+  tbTimer = setTimeout(() => {
+    if (document.fullscreenElement) toolbar.classList.add('hide');
+  }, 3000);
+}
+
+document.addEventListener('mousemove', () => {
+  if (document.fullscreenElement) { showTb(); scheduleTbHide(); }
+});
+
+// ── Remote action definitions ──────────────────────────────
+function changeSpeed(delta) {
+  speed = Math.max(1, Math.min(30, speed + delta));
+  speedR.value = speed;
+  document.getElementById('speed-v').textContent = speed;
+  toast('Speed: ' + speed);
+}
+
+// ── Momentum scroll (tap-based, works with discrete remote events) ──
+let momVel = 0;
+let momRaf = null;
+
+function tapScroll(dir) {
+  if (!manualMode) return;
+  // Each tap kicks velocity; rapid taps accumulate naturally
+  momVel += dir * (jumpAmount / 8);
+  // Cap to prevent runaway if buttons are held
+  const cap = jumpAmount * 2.5;
+  momVel = Math.max(-cap, Math.min(cap, momVel));
+  if (!momRaf) momTick();
+}
+
+function stopMomentum() {
+  momVel = 0;
+  if (momRaf) { cancelAnimationFrame(momRaf); momRaf = null; }
+}
+
+function momTick() {
+  if (Math.abs(momVel) < 0.4) { stopMomentum(); return; }
+  scrollEl.scrollTop += momVel;
+  scrollY = scrollEl.scrollTop;
+  updateProg();
+  momVel *= 0.86;   // deceleration — tweak this to taste (0.8 = snappy, 0.92 = floaty)
+  momRaf = requestAnimationFrame(momTick);
+}
+
+const ACTIONS = [
+  { id: 'play',   label: 'Play·Pause  /  Reset to Top',fn: () => manualMode ? (resetScroll(), toast('Reset')) : togglePlay() },
+  { id: 'up',     label: 'Speed Up  /  Scroll Up',     fn: () => manualMode ? tapScroll(-1) : changeSpeed(+1) },
+  { id: 'down',   label: 'Speed Down  /  Scroll Down', fn: () => manualMode ? tapScroll(+1) : changeSpeed(-1) },
+  { id: 'manual', label: 'Toggle Manual',              fn: () => toggleManual() },
+];
+
+// ── Persisted settings ─────────────────────────────────────
+let actionMap  = {};
+let jumpAmount = 250;
+
+try {
+  const s = localStorage.getItem('tp_settings');
+  if (s) {
+    const parsed = JSON.parse(s);
+    if (parsed.keymap)     actionMap  = parsed.keymap;
+    if (parsed.jumpAmount) jumpAmount = parsed.jumpAmount;
+  }
+} catch (_) {}
+
+function saveSettings() {
+  try {
+    localStorage.setItem('tp_settings', JSON.stringify({ keymap: actionMap, jumpAmount }));
+  } catch (_) {}
+}
+
+// migrate old tp_keymap key
+try {
+  const old = localStorage.getItem('tp_keymap');
+  if (old) { actionMap = JSON.parse(old); localStorage.removeItem('tp_keymap'); saveSettings(); }
+} catch (_) {}
+
+// key-identifier → actionId (reverse lookup)
+function actionForKey(kid) {
+  return Object.entries(actionMap).find(([, v]) => v === kid)?.[0];
+}
+
+// Normalise raw events → stable string identifiers
+function kidFromKey(e)   { return e.key === ' ' ? 'Space' : e.key; }
+function kidFromMouse(e) { return `Mouse:${e.button}`; }
+
+function kidLabel(kid) {
+  if (!kid) return '—';
+  const MAP = {
+    'Space':      'Space',
+    'Mouse:0':    'Left Click',
+    'Mouse:1':    'Middle Click',
+    'Mouse:2':    'Right Click',
+    'Wheel:up':   'Wheel ↑',
+    'Wheel:down': 'Wheel ↓',
+  };
+  return MAP[kid] ?? kid;
+}
+
+// ── Keyboard Shortcuts ─────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) &&
+      e.target.type !== 'range') return;
+
+  // Custom remote mapping takes priority
+  const kid = kidFromKey(e);
+  const aid = actionForKey(kid);
+  if (aid) {
+    e.preventDefault();
+    if (!e.repeat) ACTIONS.find(a => a.id === aid)?.fn();
+    return;
+  }
+
+  // Built-in shortcuts
+  switch (e.key) {
+    case ' ':      e.preventDefault(); togglePlay();   break;
+    case 'f': case 'F': toggleFS();                    break;
+    case 'r': case 'R': resetScroll(); toast('Reset'); break;
+    case 'm': case 'M': toggleManual();                break;
+    case 'ArrowUp':
+      e.preventDefault();
+      changeSpeed(+1);
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      changeSpeed(-1);
+      break;
+    case 'Escape':
+      if (playing) { stop(); toast('Paused'); }
+      break;
+  }
+});
+
+// Mouse button mapping (outside modal)
+document.addEventListener('mousedown', (e) => {
+  if (kdOpen || e.target.closest('#kd-box, #toolbar')) return;
+  const kid = kidFromMouse(e);
+  const aid = actionForKey(kid);
+  if (aid) ACTIONS.find(a => a.id === aid)?.fn();
+});
+
+window.addEventListener('blur', stopMomentum);
+
+// ── Button wiring ──────────────────────────────────────────
+playBtn.addEventListener('click', togglePlay);
+manualBtn.addEventListener('click', toggleManual);
+resetBtn.addEventListener('click', () => { resetScroll(); toast('Reset'); });
+
+// ── Remote Setup Modal ─────────────────────────────────────
+const kdOverlay  = document.getElementById('kd-overlay');
+const kdTbody    = document.getElementById('kd-tbody');
+const kdLiveKey  = document.getElementById('kd-live-key');
+let kdOpen       = false;
+let listeningFor = null; // actionId currently being assigned
+
+document.getElementById('kd-btn').addEventListener('click', openKD);
+document.getElementById('kd-close').addEventListener('click', closeKD);
+document.getElementById('kd-close-x').addEventListener('click', closeKD);
+document.getElementById('kd-clear-all').addEventListener('click', () => {
+  actionMap = {};
+  saveSettings();
+  renderTable();
+  toast('All mappings cleared');
+});
+kdOverlay.addEventListener('click', (e) => {
+  if (e.target === kdOverlay) closeKD();
+});
+
+function openKD() {
+  kdOpen = true;
+  listeningFor = null;
+  renderTable();
+
+  const jumpR = document.getElementById('kd-jump-r');
+  const jumpV = document.getElementById('kd-jump-v');
+  jumpR.value = jumpAmount;
+  jumpV.textContent = jumpAmount;
+  jumpR.oninput = () => {
+    jumpAmount = parseInt(jumpR.value);
+    jumpV.textContent = jumpAmount;
+    saveSettings();
+  };
+
+  kdOverlay.classList.add('open');
+}
+function closeKD() {
+  kdOpen      = false;
+  listeningFor = null;
+  kdOverlay.classList.remove('open');
+}
+
+function renderTable() {
+  kdTbody.innerHTML = '';
+  for (const action of ACTIONS) {
+    const kid     = actionMap[action.id] ?? null;
+    const label   = kidLabel(kid);
+    const hasKey  = !!kid;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="kd-action-name">${escHtml(action.label)}</td>
+      <td><span class="kd-badge${hasKey ? '' : ' empty'}" id="badge-${action.id}">${escHtml(label)}</span></td>
+      <td>
+        <button class="kd-set-btn${hasKey ? ' has-key' : ''}"
+                id="set-${action.id}"
+                data-id="${action.id}">
+          ${hasKey ? '✎ Change' : 'Set'}
+        </button>
+      </td>
+    `;
+    kdTbody.appendChild(tr);
+
+    tr.querySelector('.kd-set-btn').addEventListener('click', (e) => {
+      const id = e.currentTarget.dataset.id;
+      if (listeningFor === id) {
+        // Cancel
+        listeningFor = null;
+        renderTable();
+      } else {
+        listeningFor = id;
+        // Update only this button to "listening" state
+        document.querySelectorAll('.kd-set-btn').forEach(b => {
+          b.classList.remove('listening');
+          b.textContent = actionMap[b.dataset.id] ? '✎ Change' : 'Set';
+        });
+        e.currentTarget.classList.add('listening');
+        e.currentTarget.textContent = 'Press a key…';
+      }
+    });
+  }
+}
+
+function assignKey(kid) {
+  if (!listeningFor) return false;
+
+  // Remove this key from any other action it was already on
+  for (const [aid, k] of Object.entries(actionMap)) {
+    if (k === kid) delete actionMap[aid];
+  }
+  actionMap[listeningFor] = kid;
+  saveSettings();
+
+  const label = kidLabel(kid);
+  toast(`"${ACTIONS.find(a => a.id === listeningFor)?.label}" → ${label}`);
+
+  listeningFor = null;
+  renderTable();
+  return true;
+}
+
+function flashLive(text) {
+  kdLiveKey.textContent = text;
+  kdLiveKey.classList.add('lit');
+  clearTimeout(kdLiveKey._t);
+  kdLiveKey._t = setTimeout(() => kdLiveKey.classList.remove('lit'), 800);
+}
+
+// Capture-phase listeners — run before everything else
+document.addEventListener('keydown', (e) => {
+  if (!kdOpen) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const kid = kidFromKey(e);
+  flashLive(`${kidLabel(kid)}  (code: ${e.code})`);
+  assignKey(kid);
+}, true);
+
+document.addEventListener('mousedown', (e) => {
+  if (!kdOpen) return;
+  if (e.target.closest('#kd-box')) return;
+  e.preventDefault();
+  const kid = kidFromMouse(e);
+  flashLive(`${kidLabel(kid)}  (button: ${e.button})`);
+  assignKey(kid);
+}, true);
+
+document.addEventListener('wheel', (e) => {
+  if (!kdOpen) return;
+  const kid = e.deltaY > 0 ? 'Wheel:down' : 'Wheel:up';
+  flashLive(`${kidLabel(kid)}  (delta: ${Math.round(e.deltaY)})`);
+  assignKey(kid);
+}, { capture: true, passive: true });
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Auto-restore last file on load ─────────────────────────
+restoreLastFile();
+
+// ── Toast ──────────────────────────────────────────────────
+let toastTimer;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2400);
+}
+</script>
+</body>
+</html>
